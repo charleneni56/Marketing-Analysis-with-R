@@ -1,0 +1,187 @@
+---
+output: html_document
+date: "Feb 11, 2022"
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+library(readxl)
+library(expss)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(corrplot)
+library(stargazer)
+library(fastDummies)
+
+rm(list = ls())
+ass2 = read_excel('C:/Users/Emily/Desktop/Marketing_Analytics/HW2/Rideshare.xlsx')
+summary(ass2)
+spec(ass2)
+sum(is.na(ass2))
+ass2 = as.data.frame(ass2)
+
+cse=function(reg){
+  rob=sqrt(diag(vcovHC(reg, type="HC1")))
+  return(rob)
+  }
+
+```
+
+## Exploratory Data Analysis
+
+Increasing profits means either raise the price per ride or increase ride numbers, therefore we want to explore the data with some features, mostly focus on ride numbers or prices.
+
+```{r Exploratory Data Analysis Plot_1,echo=FALSE,message=F, warning=FALSE, comment="",fig.width=8, fig.height=6}
+
+# make all the plot title in the center
+theme_update(plot.title = element_text(hjust = 0.5)) 
+
+# plot1. scatter plot for price against distance
+ggplot(ass2,aes(x=distance, y=price))+geom_point(col="blue")+labs(title="Ride price against distance",x="distance", y="price")+stat_smooth(method="lm", col="red", se=FALSE)
+#cor(ass2$distance, ass2$price) # checking the correlation
+
+```
+
+* Insight from plot 1: Most of the distance condition per ride is under 5.00, we can also see that distance and price has a positive relationship, and their correlation is `r cor(ass2$distance, ass2$price)`.
+
+
+```{r Exploratory Data Analysis Plot_2,echo=FALSE,message=F, warning=FALSE, comment="",fig.width=8, fig.height=6}
+# plot2. boxplot for price by different rideshare and month
+ggplot(ass2, aes(x=month,y=price))+geom_boxplot(aes(group=month),fill="orange")+facet_wrap(~rideshare)+theme_classic()+
+  theme(strip.background=element_rect(colour="black",fill="light grey"))
+
+```
+
+* Insight from plot 2: The price varies a lot, and the average price is higher in November compared to August, September, October and December with both Lyft and Uber. And the average price from Lyft is higher than Uber in November, however, we can also see that the average price in October from Lyft is lower than Uber.
+
+```{r Exploratory Data Analysis Plot_3,echo=FALSE,message=F, warning=FALSE, comment="",fig.width=8, fig.height=6}
+# plot3. heatmap for average price by different rideshare and weekday
+subweekday = ass2 %>% group_by(weekday, rideshare) %>% summarise_at(vars(price,distance), list(mean = mean)) 
+ggplot(subweekday, aes(x=rideshare,y=weekday,fill=price_mean))+geom_tile()+scale_fill_gradient(low="light blue", high="dark blue")+labs(title="Average Price by different rideshare and weekday")
+
+```
+
+* Insight from plot 3: Under different weekdays, the average price range is larger and fluctuate with Lyft, while the average price range is similar by Uber.
+
+```{r Exploratory Data Analysis Plot_4,echo=FALSE,message=F, warning=FALSE, comment="",fig.width=8, fig.height=6}
+# plot4. barchart for ride numbers with different weather
+subweather = ass2 %>% group_by(weather) %>% summarise(count=n(), meanprice=mean(price))
+
+ggplot(subweather, aes(x=reorder(weather,-count),y=count))+geom_col(fill="dark blue")+labs(title="Number of rides with different weather", y="ride_numbers", x="weather")
+#insight: people prefer to take rides on cloudy day, and they tend to not take rides on foggy and cleary-day.
+
+
+```
+
+* Insight from plot 4: People prefer to take rides on cloudy day, and they tend to not take rides on foggy days or cleary-days.
+
+
+## Model 1 and 2: Multi-linear Regression
+
+```{r regression_1,echo=FALSE,message=F, warning=FALSE, comment="",fig.width=8, fig.height=6}
+# changing selected category variables to dummies
+ass2_clean = dummy_cols(ass2, select_columns=c('weekday','rideshare','weather'))
+ass2_clean = as.data.frame(ass2_clean)
+options("scipen"=100, "digits"=4)
+ass2_num = unlist(lapply(ass2_clean, is.numeric))
+cor_df = as.data.frame(as.table(cor(ass2_clean[ass2_num])))
+cor_df = subset(cor_df, Var2 == "price") # check the correlation with price
+
+# create multi-linear regression model 1 for prediction
+m1 = lm(price ~ distance+month+surgeMultiplier+rideshare_Lyft+weekday_Sun+temperature+weather_cloudy+weather_fog,data=ass2_clean)
+
+# create multi-linear regression model 2 for prediction
+m2<-lm(price~distance+surgeMultiplier+rideshare_Lyft+temperature+weekday_Mon+weekday_Tue,data=ass2_clean)
+
+# show both regression on descriptive table
+stargazer(m1, m2,title="Descriptive Statistics", type="text", df=FALSE, digits=3)
+
+```
+
+For the first linear regression model, R-squared=0.181, which
+means the descriptors explain 18% of the variation in price. For
+the second linear regression model, R-squared=0.122, it shows
+that the model explains 12.2% of the variation in price. It
+demonstrates that “Month” might be an important feature for
+the model to make a prediction.
+
+
+## validation for multi-linear regression: RMSE
+
+```{r validation,echo=FALSE,message=F, warning=FALSE, comment="",fig.width=8, fig.height=6}
+
+# create two samples for training and validation
+set.seed(0)
+sample = sample.int(n=nrow(ass2_clean),replace=FALSE, size=0.75*nrow(ass2_clean))
+trainset = ass2_clean[sample,]
+testset = ass2_clean[-sample,]
+
+### Multi-regression model 1 
+
+train_model1=lm(price ~ distance+month+surgeMultiplier+rideshare_Lyft+weekday_Sun+temperature+weather_cloudy+weather_fog,ass2_clean[sample,])
+
+# stargazer parts
+#stargazer(train_model1,title="multilinear regression: train_model1", type="text",digits=3)
+p = predict(train_model1,newdata= ass2_clean[-sample,]) # dont use 'testset', use the '-sample' on newdata
+
+# calculate rmse for training versus testset
+actual = trainset$price
+predicted_train1 = train_model1$fitted.values
+trainset_df1 = data.frame(actual, predicted_train1)
+rmse_train1 = sqrt(mean((trainset_df1$actual - trainset_df1$predicted_train1)^2))
+rmse_train1
+
+# rmse for testset data
+actual_test = testset$price
+predicted_test1 = p
+testsetdf1 = data.frame(actual_test, predicted_test1)
+rmse_test1 = sqrt(mean((testsetdf1$actual_test - testsetdf1$predicted_test1)^2))
+rmse_test1
+
+### Multi-regression model 2 
+train_model2=lm(price~distance+surgeMultiplier+rideshare_Lyft+temperature+weekday_Mon+weekday_Tue,ass2_clean[sample,])
+
+# stargazer parts
+#stargazer(train_model2,title="multilinear regression: train_model2", type="text",digits=3)
+p = predict(train_model2,newdata= ass2_clean[-sample,]) # dont use 'testset', use the '-sample' on newdata
+
+# calculate rmse for training versus testset
+actual = trainset$price
+predicted_train2 = train_model2$fitted.values
+trainset_df2 = data.frame(actual, predicted_train2)
+rmse_train2 = sqrt(mean((trainset_df2$actual - trainset_df2$predicted_train2)^2))
+rmse_train2
+
+# rmse for testset data
+actual_test2 = testset$price
+predicted_test2 = p
+testsetdf2 = data.frame(actual_test2, predicted_test2)
+rmse_test2 = sqrt(mean((testsetdf2$actual_test2 - testsetdf2$predicted_test2)^2))
+rmse_test2
+```
+
+
+RMSE (root mean squared error) of the training and testing sets: Using multi-linear regression model 1 to do the training and testing with set.seed(0), we could get RMSE 11.31 on the training set, and RMSE 11.22 on the testing set. To compare, multi-linear regression model 2 gets RMSE 11.7, and RMSE 11.62 on the testing set. Based on the result above, the first model has minimized the RMSE.
+
+## validation for multi-linear regression: MAE
+
+```{r regression_val,echo=FALSE,message=F, warning=FALSE, comment=""}
+# Residuals
+mae <- function(error) { mean(abs(error)) }
+mae(m1$residuals)
+mae <- function(error) { mean(abs(error)) }
+mae(m2$residuals)
+
+```
+
+To summarize and assess the quality of the prediction model, we
+use MAE(mean absolute error) to test both the regression. The
+MAE for regression model1 is 0.36, smaller than regression model
+2.
+
+## Conclusion
+Based on R-Squared, RMSE , and MAE scores, multi-linear
+regression model1 is more suitable to make a prediction for the
+dataset

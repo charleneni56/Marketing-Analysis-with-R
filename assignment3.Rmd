@@ -1,0 +1,188 @@
+---
+
+output: html_document
+date: "Feb 18, 2022"
+---
+
+```{r Data setup, include=FALSE}
+
+knitr::opts_chunk$set(echo = TRUE)
+library(readxl)
+library(expss)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(stargazer)
+
+
+# load data, check dataset
+rm(list = ls())
+ass3 = read_excel('C:/Users/NiNi/Desktop/MKTG2505_marketing analytics/assignment/OnlineSales.xlsx')
+summary(ass3) # 250000 obs
+sum(is.na(ass3)) # there is 157 null values in the dataset
+
+```
+
+## Exploratory Data Analysis
+
+```{r Exploratory Data Analysis Plot,message=F, warning=FALSE, comment="",fig.width=8, fig.height=6}
+
+# clean data: Drop data that has zero quantity
+ass3 = subset(ass3, ass3$Quantity > 0) # now only 207727obs
+
+# set data as dataframe, make sure date is in Date format
+ass3 = as.data.frame(ass3)
+ass3$TransactionDate = as.Date(ass3$TransactionDate)
+# set a present date as the last day from the month
+present = as.Date('2021-1-31')
+
+
+## Visualization: 
+
+# Plot 1: Total Revenue by month
+# using function from library(lubridate) to sort date
+library(lubridate)
+ass3$month = floor_date(ass3$TransactionDate, "month") 
+ggplot(ass3, aes(x=month, y=Revenue))+geom_col(fill="dark orange")+labs(title="Total Revenue by Month", y="Total Revenue", x="Month")
+# insight from plot 1: During holiday seasons, such as October, November and December, the sales are more than other months.
+
+# Plot 2: Top10 customers by total sales
+Plot2 = ass3 %>% group_by(CustomerID)%>% summarise(Total_Revenue=sum(Revenue))
+Plot2_sort = Plot2[order(-Plot2$Total_Revenue),][1:10,]
+ggplot(Plot2_sort, aes(x=reorder(as.character(CustomerID),-Total_Revenue),y=Total_Revenue))+
+  geom_col(fill="orange")+labs(title="Top10 Customer", y="Total_Revenue", x="CustomerID")
+# insight from plot 2: From plot 2 we can see that there's a huge sales difference from each customer, some customers having higher buying capability than others, so we should segment the customers to better target each group.
+
+```
+
+
+## Cluster Analysis Data Preparation
+
+```{r Data Preparation_1,echo=FALSE,message=F, warning=FALSE, comment=""}
+
+# group by customerID to get customer behavior data: recency, frequency and monetary
+rmf = ass3 %>% group_by(CustomerID) %>% summarise(recency=(present -max(TransactionDate)),freq=(count=n()), monetary=sum(Revenue))
+
+rmf$recency = as.numeric(rmf$recency) # change the days to be numeric data
+summary(rmf)
+
+
+# examine the correlation for recency, frequency and monetary
+library(ggcorrplot)
+cor_rmf = round(cor(rmf[c('recency','freq','monetary')]),3)
+ggcorrplot(cor_rmf,colors = c("black", "white","blue"))
+pairs(rmf[c('recency','freq','monetary')])
+
+```
+
+
+```{r Data Preparation_2,echo=FALSE,message=F, warning=FALSE, comment=""}
+
+# Examine the skewness of the data
+ggplot(rmf, aes(x=recency))+geom_histogram(aes(y=..density..),fill="dark blue",bins=30)+geom_density(alpha=.2, color="red") 
+ggplot(rmf, aes(x=freq))+geom_histogram(aes(y=..density..),fill="dark blue",bins=30)+geom_density(alpha=.2, color="red") 
+ggplot(rmf, aes(x=monetary))+geom_histogram(aes(y=..density..),fill="dark blue",bins=30)+geom_density(alpha=.2, color="red") 
+
+# taking log on the data to reduce skewness
+rmf2 = rmf
+rmf2$recency = log(rmf2$recency)
+rmf2$freq =log(rmf2$freq)
+rmf2$monetary =log(rmf2$monetary)
+
+ggplot(rmf2, aes(x=recency))+geom_histogram(aes(y=..density..),fill="dark blue",bins=30)+geom_density(alpha=.2, color="red") 
+ggplot(rmf2, aes(x=freq))+geom_histogram(aes(y=..density..),fill="dark blue",bins=30)+geom_density(alpha=.2, color="red") 
+ggplot(rmf2, aes(x=monetary))+geom_histogram(aes(y=..density..),fill="dark blue",bins=30)+geom_density(alpha=.2, color="red") 
+
+
+```
+
+## Cluster Model 1 - Non-Logged, Sacled Data using Kmeans
+
+```{r Cluster Analysis_1_Scaled without logged data using Kmeans,echo=FALSE,message=F, warning=FALSE, comment=""}
+### this part is done by another teammate, just copypaste her codes
+
+library(factoextra)
+
+# normalizing the variables
+scaled_wo = scale(rmf[c(2:4)]) # scaled the non-logged numeric data 
+sum(is.na(scaled_wo)) # there is no null values in columns
+scaled_data = as.data.frame(scaled_wo)
+
+# find optimal K value
+# using sum squares
+fviz_nbclust(scaled_wo, kmeans, method = "wss")+labs(subtitle = "Elbow method")
+# Using silhouette
+fviz_nbclust(scaled_wo, kmeans, method='silhouette')
+
+# kmeans
+km_1 <- kmeans(scaled_wo, centers=4, nstart = 100)
+
+# Visualization
+km.clusters <- km_1$cluster
+fviz_cluster(list(data=scaled_wo, cluster=km.clusters))
+
+#table(km.clusters, rfm_final$CustomerID)
+table(km.clusters)
+
+#table score
+kmeans_table1 = data.frame(km_1$size,round((km_1$centers),3))
+kmeans_table1
+
+
+```
+
+## Cluster Model 2 - Logged and Sacled Data using Kmeans
+
+```{r Cluster Analysis_2_Logged and Scaled Data using Kmeans,echo=FALSE,message=F, warning=FALSE, comment=""}
+# normalizing the variables
+scaled_data = scale(rmf2[c(2:4)]) # scaled the logged numeric data
+sum(is.na(scaled_data)) # there is no null values in columns
+scaled_data = as.data.frame(scaled_data)
+
+# k-means
+# find the optimal k, should between 3-5
+fviz_nbclust(scaled_data,kmeans,method='wss') 
+fviz_nbclust(scaled_data,kmeans,method='silhouette')
+
+set.seed(2022)
+cluster_data = kmeans(scaled_data[,],4,nstart=20) 
+
+# table of kmeans cluster results
+table(cluster_data$cluster)
+kmeans_table = data.frame(cluster_data$size, round(cluster_data$centers,3))
+kmeans_table 
+# we can also check each customer's cluster
+kmeans_df <- data.frame(Cluster = cluster_data$cluster, rmf2)
+ 
+# visualized Kmeans cluster
+fviz_cluster(cluster_data,scaled_data)
+
+
+```
+
+## Cluster Analysis Model3 - Logged and Sacled Data using H-Cluster
+
+```{r Cluster Analysis_3_Logged and Sacled Data using H-clustering,echo=FALSE,message=F, warning=FALSE, comment=""}
+
+# using the same logged and normalized data, calculating the distance
+distance=dist(scaled_data)
+
+# hierarchical cluster creation
+scaled_data.hcluster = hclust(distance,method="complete")
+plot(scaled_data.hcluster)
+
+# find the optimal k
+fviz_nbclust(scaled_data,FUN=hcut,method='wss')
+fviz_nbclust(scaled_data,FUN=hcut,method='silhouette')
+
+# use cutree to separate the tree
+member = cutree(scaled_data.hcluster,k=4)
+
+# tabulate membership
+table(member)
+# look at characteristics of each group by means on different variables
+aggregate((scaled_data), list(member), mean)
+
+
+
+```

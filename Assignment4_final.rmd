@@ -1,0 +1,278 @@
+---
+output: html_document
+date: "Mar 5, 2022"
+---
+
+```{r Data setup, echo=FALSE, message=F, warning=FALSE, comment="", include=FALSE}
+
+
+# Set Working Directory
+
+#setwd("/Users/friend/Documents/MKTG2505/Assignment 4")
+#getwd()
+
+#Load packages and dependencies 
+
+library(readr)
+library(ggrepel)
+library(ggwordcloud)
+library(wordcloud)
+library(readxl)
+library(expss)
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(stargazer)
+library(tidyr)
+library(topicmodels)
+library(tm)
+library(tidytext)
+library(textdata)
+library(ldatuning)
+library(topicmodels)
+library(stringr)    
+
+# Load data, Check dataset
+
+rm(list = ls())
+FoodReviews <- read_excel("FoodReviews.xlsx")
+ass4 <- FoodReviews
+summary(ass4) 
+sum(is.na(ass4)) # no null values
+
+```
+
+## Exploratory Data Analysis
+
+```{r Exploratory Data Analysis Plot, echo=FALSE, message=F, warning=FALSE, comment="",fig.width=8, fig.height=6}
+
+df <- read_excel("FoodReviews.xlsx")
+text_reviews <- df[,"Text"]
+docs <- Corpus(VectorSource(text_reviews))
+
+docs <- docs %>%
+  tm_map(removeNumbers) %>%
+  tm_map(removePunctuation) %>%
+  tm_map(stripWhitespace)
+docs <- tm_map(docs, content_transformer(tolower))
+docs <- tm_map(docs, removeWords, stopwords("english"))
+
+dtm <- TermDocumentMatrix(docs) 
+matrix <- as.matrix(dtm) 
+words <- sort(rowSums(matrix),decreasing=TRUE) 
+df <- data.frame(word = names(words),freq=words)
+
+set.seed(1234) # for reproducibility 
+
+# Word Cloud of reviews textual data
+
+wordcloud(words = df$word, 
+          freq = df$freq, min.freq = 1,max.words=50, 
+          random.order=FALSE, rot.per=0.35,colors=brewer.pal(8, "Dark2"))
+
+df <- read_excel("FoodReviews.xlsx")
+
+text_reviews <- df[,"Review_Title"]
+docs <- Corpus(VectorSource(text_reviews))
+
+docs <- docs %>%
+  tm_map(removeNumbers) %>%
+  tm_map(removePunctuation) %>%
+  tm_map(stripWhitespace)
+docs <- tm_map(docs, content_transformer(tolower))
+docs <- tm_map(docs, removeWords, stopwords("english"))
+
+dtm <- TermDocumentMatrix(docs) 
+matrix <- as.matrix(dtm) 
+words <- sort(rowSums(matrix),decreasing=TRUE) 
+df <- data.frame(word = names(words),freq=words)
+
+set.seed(1234) # for reproducibility 
+
+# Word Cloud of reviews title data
+
+wordcloud(words = df$word, 
+          freq = df$freq, min.freq = 1,max.words=100, 
+          random.order=FALSE, rot.per=0.35,colors=brewer.pal(8, "Dark2"))
+
+# plot3: Total review count v/s helpfulness score
+
+df <- read_excel("FoodReviews.xlsx")
+reviews_count <- aggregate(df$Rating, by=list(df$Rating), FUN=length)
+helpfullness_count <- aggregate(df$Helpfulness_Score, by=list(df$Helpfulness_Score), FUN=length)
+helpfullness_count <- head(helpfullness_count,10)
+names(helpfullness_count)[1] <- 'Helpfullness_Score'
+names(helpfullness_count)[2] <- 'Total_Count'
+helpfullness_count <- head(helpfullness_count,30)
+ggplot(helpfullness_count, aes(x=Helpfullness_Score, y=Total_Count)) +
+  geom_line() +ggtitle("Helpfullness Score v/s Total Count of reviews") 
+
+head(helpfullness_count,30)
+
+# plot4: Total number of review ratings
+
+ggplot(data=df, aes(x=Rating))+geom_bar(fill="dark orange")+labs(y="Total counts", title="Total number of review ratings")
+
+```
+
+
+## Sentiment analysis, using 'nrc' and 'afinn' lexicons
+
+```{r sentiment, echo=FALSE, message=F, warning=FALSE, comment=""}
+
+ass4 <- as.data.frame(ass4) # make sure the data is a dataframe
+mydf <- ass4$Text
+mydf <- tibble(line=1:5000,text=ass4$Text) # get the text from data im tibble format
+
+# cleaning data: 
+clean_data <- mydf
+clean_data$text <- tolower(mydf$text) # lower every word
+clean_data$text <- gsub("<br />", "", clean_data$text) # remove line breaks
+clean_data$text <- gsub("a href=", " ", clean_data$text) # remove url prefix
+clean_data$text <- gsub("<.*>", "", clean_data$text) # remove url
+clean_data$text <- gsub("[[:punct:]]", "", clean_data$text) # remove punctuation
+clean_data$text <- gsub("[[:digit:]]+", " ", clean_data$text) # remove numbers
+
+df_word <- clean_data %>% unnest_tokens(word, text) # token the text into words
+
+# creating a curse_words dataframe with the same column names from stop_words
+curse_words <- data.frame( word=c("fuck","shit","dick","bs","ass","damn","asshole","bitch"), lexicon=c("CURSE","CURSE","CURSE","CURSE","CURSE","CURSE","CURSE","CURSE"))
+stop_words <- rbind(stop_words, curse_words) # binding stop words(build-in from 'tidytext' package) and curse words
+
+df_clean <- df_word %>% anti_join(stop_words) # removing stop_words and curse_words then count the words
+
+## pivot_wider to split the positive and negative
+## mutate allows to create new variable 
+
+
+# sentiment using 'nrc'
+nrc_pos_neg <- get_sentiments('nrc') %>% filter(sentiment %in% c("positive", "negative"))
+df_nrc <- df_clean %>% count(word, sort=TRUE) %>% inner_join(nrc_pos_neg)%>%
+          pivot_wider(names_from=sentiment, values_from=n, values_fill=0) %>% mutate(sentiment=positive-negative)
+
+df_nrc %>% slice_max(df_nrc$sentiment, n=10) %>% ggplot(aes(reorder(word,sentiment), sentiment, fill=word))+geom_col()+coord_flip()+labs(x="word", y="sentiment", title="Sentiment analysis using 'nrc', top 10 positive words")
+df_nrc %>% slice_min(df_nrc$sentiment, n=10) %>% ggplot(aes(reorder(word,sentiment), sentiment, fill=word))+geom_col()+coord_flip()+labs(x="word", y="sentiment", title="Sentiment analysis using 'nrc', top 10 negative words")
+
+df_nrc_overall <- sum(df_nrc$sentiment)
+df_nrc_overall
+
+# sentiment using 'afinn'
+df_afinn <- df_clean %>% inner_join(get_sentiments('afinn')) %>% group_by(word) %>% summarise(sentiment=sum(value))
+
+df_afinn %>% slice_max(df_afinn$sentiment, n=10) %>% ggplot(aes(reorder(word,sentiment), sentiment, fill=word))+geom_col()+coord_flip()+labs(x="word", y="sentiment", title="Sentiment analysis using 'afinn', top 10 positive words")
+df_afinn %>% slice_min(df_afinn$sentiment, n=10) %>% ggplot(aes(reorder(word,sentiment), sentiment, fill=word))+geom_col()+coord_flip()+labs(x="word", y="sentiment", title="Sentiment analysis using 'afinn', top 10 negative words")
+
+df_afinn_overall <- sum(df_afinn$sentiment)
+df_afinn_overall
+
+# sentiment analysis difference between 'nrc' and 'afinn' lexicons
+df_join <- merge(x=df_nrc,y=df_afinn,by="word",all=TRUE)
+df_join$difference <- abs(df_join$sentiment.y-df_join$sentiment.x)
+arrange(df_join, desc(difference)) %>% slice_max(difference, n=10) %>% ggplot(aes(x=reorder(word,difference),y=difference,fill=word))+geom_col()+coord_flip()+labs(x="word", y="absolute difference", title="Sentiment difference between 'nrc' and 'afinn' lexicons")
+
+```
+
+## Topic Modeling
+
+```{r topicmodel, echo=FALSE, message=F, warning=FALSE, comment=""}
+
+# Import the data for Topic Modeling
+
+FoodReviews<- read_excel('FoodReviews.xlsx')
+FoodReviews<-as.data.frame(FoodReviews)
+
+# Check Columns and the Structure of Data
+
+colnames(FoodReviews)
+str(FoodReviews)
+
+# Summary Statistics of the Data
+
+summary(FoodReviews)
+sum(is.na(FoodReviews))
+
+# Data Cleaning Process
+
+# Tokenization of data
+
+myfood_text<-FoodReviews %>%
+  unnest_tokens(output=word, input=Text)
+
+# Removal of Stop Words
+
+data("stop_words")
+myfood_text<-myfood_text %>% anti_join(stop_words)
+
+
+# LDA for Topic Modeling
+
+myfood_corp<-VCorpus(VectorSource(FoodReviews$Text))
+myfood_corp<-tm_map(myfood_corp,stripWhitespace)
+myfood_corp<-tm_map(myfood_corp,content_transformer(removePunctuation))
+myfood_corp<-tm_map(myfood_corp,content_transformer(tolower))
+myfood_corp<-tm_map(myfood_corp,removeWords,stopwords("en"))
+tm_map(myfood_corp,stemDocument)
+food_dtm<-DocumentTermMatrix(myfood_corp)
+inspect(food_dtm)
+
+# Using LDA Algorithm
+
+myfood_lda<-LDA(food_dtm,k=2, control=list(seed=2022))
+myfood_lda
+
+# Exploring and interpreting the model by extracting beta for per topic per word probabilities
+
+food_topics<-tidy(myfood_lda,matrix="beta") # higher beta scores mean higher probabilities
+food_topics
+
+# Finding ten most common terms within each topic
+
+food_top_terms<-food_topics %>% group_by(topic) %>% slice_max(beta,n=10)
+
+# Terms with the greatest difference in beta between the two topics
+
+food_beta_wide<-food_top_terms %>% mutate(topic=paste0("topic",topic)) %>% pivot_wider(names_from = topic,values_from = beta) %>% filter (topic1> 0.01|topic2>0.01) %>% mutate(ratio=log2(topic2/topic1))
+
+# Visualization Plot 1
+
+# Finding ten terms most common within each topic
+
+food_top_terms %>%
+  mutate(term = reorder_within(term, beta, topic)) %>%
+  ggplot(aes(beta, term, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~ topic, scales = "free") +
+  scale_y_reordered()+labs(title="10 Most common terms within each topic")
+
+
+# Visualization Plot 2
+
+# Terms with greatest difference in beta between the two topics
+
+beta_wide <- food_topics %>%
+  filter(str_detect(term,"[:alpha:]"))%>%
+  mutate(topic = paste0("topic", topic)) %>%
+  pivot_wider(names_from = topic, values_from = beta) %>% 
+  filter(topic1 > .001 | topic2 > .001) %>%
+  mutate(log_ratio = log2(topic2 / topic1))
+
+beta_wide_top_terms_cut<-beta_wide %>% filter (log_ratio>5|log_ratio <(-5)) 
+
+ggplot(beta_wide_top_terms_cut, aes(x = reorder(term,log_ratio), y = log_ratio,fill = factor(term))) + geom_bar(stat = "identity")+coord_flip()+labs(x="Term",title="Greatest difference between two topics")+
+  guides(fill = guide_legend(title = 'Term'))
+
+# Visualization Plot 3
+
+# Finding the best topic numbers
+
+# Comparing gamma for each document shows the percentage of words from each topic in each document
+
+food_documents <- tidy(myfood_lda,matrix="gamma")
+
+food_result<-FindTopicsNumber(food_dtm,topics = seq(from = 2, to = 5, by = 1),metrics=c("Griffiths2004", "CaoJuan2009","Arun2010","Deveaud2014"), method = 'Gibbs', control = list(seed=2022),mc.cores=2L,verbose = TRUE)
+FindTopicsNumber_plot(food_result)
+
+# A lower topic number works better for CaoJuan2009 and Arun2010 whereas a higher number is better for Griffiths2004 and Deveaud2014.
+
+
+```
